@@ -11,6 +11,7 @@
  * the page directory will exist. The startup code will be overwritten by
  * the page directory.
  */
+
  /*
 * head.s 含有 32 位启动代码。
 * 注意!!! 32 位启动代码是从绝对地址 0x00000000 开始的，这里也同样是页目录将存在的地方，
@@ -334,7 +335,7 @@ gdt_descr:        # 下面两行是 lgdt 指令的 6 字节操作数：长度，
 	.word 256*8-1		# so does gdt (not that that's any
 	.long _gdt		# magic number, but it works for me :^)
 
-	.align 3       # 按 8 字节方式对齐内存地址边界。
+	.align 3       # 按 8 字节方式对齐内存地址边界。2^3
 _idt:	.fill 256,8,0		# idt is uninitialized  # 256 项，每项 8 字节，填 0。
 # 全局表。前 4 项分别是空项（不用）、代码段描述符、数据段描述符、系统段描述符，其中
 # 系统段描述符 linux 没有派用处。后面还预留了 252 项的空间，用于放置所创建任务的

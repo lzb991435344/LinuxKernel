@@ -7,6 +7,17 @@
 #define __LIBRARY__
 #include <unistd.h>
 #include <time.h>
+/**
+  （1）main.c 程序首先利用setup.s 程序取得的系统参数设置系统的根文件设备号以及一些内存全局变量
+  （2）内核进行所有方面的硬件初始化工作。包括陷阱门、块设备、字符设备和tty，包括人工创建第一个任务（task 0）。
+   待所有初始化工作完成就设置中断允许标志，开启中断
+  （3）内核完成初始化后，内核将执行权切换到了用户模式，也即CPU 从0 特权级切换到了第3 特权级。然后系统
+  第一次调用创建进程函数fork()，创建出一个用于运行init()的子进程。
+  （4）在该进程（任务）中系统将运行控制台程序。如果控制台环境建立成功，则再生成一个子进程，用于
+   运行shell 程序/bin/sh。若该子进程退出，父进程返回，则父进程进入一个死循环内，继续生成子进程，并
+   在此子进程中再次执行shell 程序/bin/sh，而父进程则继续等待。
+
+*/
 
 /*
  * we need this inline - forking from kernel space will result
@@ -20,44 +31,126 @@
  * won't be any messing with the stack from main(), but we define
  * some others too.
  */
+/*
+* 我们需要下面这些内嵌语句 - 从内核空间创建进程(forking)将导致没有写时复制（COPY ON WRITE）!!!
+* 直到一个执行execve 调用。这对堆栈可能带来问题。处理的方法是在fork()调用之后不让main()使用
+* 任何堆栈。因此就不能有函数调用 - 这意味着fork 也要使用内嵌的代码，否则我们在从fork()退出
+* 时就要使用堆栈了。
+* 实际上只有pause 和fork 需要使用内嵌方式，以保证从main()中不会弄乱堆栈，但是我们同时还
+* 定义了其它一些函数。*/
+
+//Linux在内核空间创建进程时不使用写时复制。main()函数在移动到用户模式（任务0）之后执行内嵌方式的
+//fork()和pause(),因此保证不使用任务0的用户栈。在执行move_to_user_mode()之后，程序就以任务0的
+//身份运行。任务0是所有将创建子进程的父进程。当创建init进程之后，由于任务1属于内核进程，无写时复制的
+//功能。此时用户0的用户栈就是任务1的用户栈，他们共同使用一个栈空间。因此在执行任务0的时候不希望对
+//堆栈有任何的操作。再执行fork + execve函数之后，已经不属于内核空间，可以使用写时复制。
+
+
+
+/**
+（1）static inline _syscall0(int,fork)
+// 是unistd.h 中的内嵌宏代码。以嵌入汇编的形式调用
+// Linux 的系统调用中断0x80。该中断是所有系统调用的
+// 入口。该条语句实际上是int fork()创建进程系统调用。
+
+（2）static inline _syscall0(int,pause)
+  //int pause()系统调用，暂停进程的执行，直到收到一个信号
+
+（3）static inline _syscall1(int,setup,void *,BIOS)
+  // int setup(void * BIOS)系统调用，仅用于
+  // linux 初始化（仅在这个程序中被调用）
+
+（4）static inline _syscall0(int,sync)
+  // int sync()系统调用：更新文件系统。
+
+**/
+
+
+/**
+// 以下定义系统调用嵌入式汇编宏函数。
+// 不带参数的系统调用宏函数。type name(void)。
+// %0 - eax(__res)，%1 - eax(__NR_##name)。其中name 是系统调用的名称，与 __NR_ 组合形成上面
+// 的系统调用符号常数，从而用来对系统调用表中函数指针寻址。
+// 返回：如果返回值大于等于0，则返回该值，否则置出错号errno，并返回-1。
+#define _syscall0(type,name) \
+type name(void) \
+{ \
+long __res; \
+__asm__ volatile ( "int $0x80" \        // 调用系统中断0x80。
+:"=a" (__res) \                        // 返回值赋值给eax(__res)。
+:"" (__NR_##name)); \                 // 输入为系统中断调用号__NR_name。
+      if (__res >= 0) \                // 如果返回值>=0，则直接返回该值。
+      return (type) __res; errno = -__res; \        // 否则置出错号，并返回-1。
+      return -1;}
+
+将代码展开得到：
+static inline int fork(void)
+{
+	long __res;
+	__asm__ volatile ( "int $0x80","=a"(__res),:"" (__NR_fork));
+	if (__res >= 0)               
+         return (type) __res;
+    errno = -__res; 
+    return -1;
+} 
+
+//gcc会把上述的语句直接插入fork()语句的代码处，执行fork()不会引起函数的调用
+//系统中断调用执行中断指令INT时还是避免不了使用堆栈，但是使用的是内核栈，而不是
+//用户栈，不会对用户栈产生影响。
+
+//进程0和init进程（进程1）共用内核代码区（小于1MB的物理内存）相同的代码和物理内存页面（640KB），
+//执行的代码不在一处，实际上用着相同的用户堆栈区。
+
+//67
+//238
+*/
 static inline _syscall0(int,fork)
 static inline _syscall0(int,pause)
 static inline _syscall1(int,setup,void *,BIOS)
 static inline _syscall0(int,sync)
 
-#include <linux/tty.h>
-#include <linux/sched.h>
-#include <linux/head.h>
-#include <asm/system.h>
-#include <asm/io.h>
+#include <linux/tty.h>  // tty 头文件，定义了有关tty_io，串行通信方面的参数、常数。
+#include <linux/sched.h> // 调度程序头文件，定义了任务结构task_struct、第1 个初始任务
+                         // 的数据。还有一些以宏的形式定义的有关描述符参数设置和获取的
+                         // 嵌入式汇编函数程序。
+#include <linux/head.h>  // head 头文件，定义了段描述符的简单结构，和几个选择符常量。
+#include <asm/system.h>  // 系统头文件。以宏的形式定义了许多有关设置或修改
+                         // 描述符/中断门等的嵌入式汇编子程序。
+#include <asm/io.h>     // io 头文件。以宏的嵌入汇编程序形式定义对io 端口操作的函数。
 
-#include <stddef.h>
-#include <stdarg.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/types.h>
+#include <stddef.h>   // 标准定义头文件。定义了NULL, offsetof(TYPE, MEMBER)。
+#include <stdarg.h>  // 标准参数头文件。以宏的形式定义变量参数列表。主要说明了-个
+                     // 类型(va_list)和三个宏(va_start, va_arg 和va_end)，vsprintf、
+                     // vprintf、vfprintf。
+#include <unistd.h>  
+#include <fcntl.h>  // 文件控制头文件。用于文件及其描述符的操作控制常数符号的定义。
+#include <sys/types.h> // 类型头文件。定义了基本的系统数据类型
 
-#include <linux/fs.h>
+#include <linux/fs.h> // 文件系统头文件。定义文件表结构（file,buffer_head,m_inode 等）。
 
-static char printbuf[1024];
+static char printbuf[1024]; // 静态字符串数组。
 
-extern int vsprintf();
-extern void init(void);
-extern void blk_dev_init(void);
-extern void chr_dev_init(void);
-extern void hd_init(void);
-extern void floppy_init(void);
-extern void mem_init(long start, long end);
-extern long rd_init(long mem_start, int length);
-extern long kernel_mktime(struct tm * tm);
-extern long startup_time;
+extern int vsprintf();  // 送格式化输出到一字符串中（在kernel/vsprintf.c，92 行）。
+extern void init(void); // 函数原形，初始化（在168 行）。
+extern void blk_dev_init(void);  // 块设备初始化子程序（kernel/blk_drv/ll_rw_blk.c,157 行）
+extern void chr_dev_init(void); // 字符设备初始化（kernel/chr_drv/tty_io.c, 347 行）
+extern void hd_init(void);  // 硬盘初始化程序（kernel/blk_drv/hd.c, 343 行）
+extern void floppy_init(void); // 软驱初始化程序（kernel/blk_drv/floppy.c, 457 行）
+extern void mem_init(long start, long end); // 内存管理初始化（mm/memory.c, 399 行）
+extern long rd_init(long mem_start, int length); //虚拟盘初始化(kernel/blk_drv/ramdisk.c,52)
+extern long kernel_mktime(struct tm * tm);  // 建立内核时间（秒）
+extern long startup_time; // 内核启动时间（开机时间）（秒）
 
 /*
  * This is set up by the setup-routine at boot-time
+   以下这些数据是由setup.s 程序在引导时间设置的
  */
-#define EXT_MEM_K (*(unsigned short *)0x90002)
-#define DRIVE_INFO (*(struct drive_info *)0x90080)
-#define ORIG_ROOT_DEV (*(unsigned short *)0x901FC)
+
+//将指定的线性地址强行转换为给定数据类型的指针，并获取指针的内容
+//内核代码段被映射到从物理地址零开始的地方，现行地址刚好对应物理地址
+#define EXT_MEM_K (*(unsigned short *)0x90002) // 1M 以后的扩展内存大小（KB）。
+#define DRIVE_INFO (*(struct drive_info *)0x90080) // 硬盘参数表基址。
+#define ORIG_ROOT_DEV (*(unsigned short *)0x901FC) // 根文件系统所在设备号。
 
 /*
  * Yeah, yeah, it's ugly, but I cannot find how to do this correctly
@@ -178,7 +271,7 @@ void init(void)
 	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
 	if (!(pid=fork())) {
 		close(0);
-		if (open("/etc/rc",O_RDONLY,0))
+		if (open("/etc/rc",O_RDONLY,0)) //
 			_exit(1);
 		execve("/bin/sh",argv_rc,envp_rc);
 		_exit(2);

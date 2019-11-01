@@ -159,17 +159,31 @@ extern long startup_time; // 内核启动时间（开机时间）（秒）
  * bios-listing reading. Urghh.
  */
 
+//这段宏读取CMOS 实时时钟信息。
+// 0x70 是写端口号，0x80|addr 是要读取的CMOS 内存地址。
+// 0x71 是读端口号。
 #define CMOS_READ(addr) ({ \
 outb_p(0x80|addr,0x70); \
 inb_p(0x71); \
 })
 
+// 将BCD 码转换成二进制数字。
+//使用半个字节（4Bit）表示一个十进制数
+//1个字节表示2个10进制数，
+//(val)&15表示10进制的个位数
+//(val)>>4 表示10进制的十位数，再乘以10，
+//两者之和就是一个字节的BCD码实际的二进制数
 #define BCD_TO_BIN(val) ((val)=((val)&15) + ((val)>>4)*10)
 
+// 该子程序取CMOS 时钟，并设置开机时间成startup_time(秒)。
+// 取CMOS实时时钟信息为开机时间，并保存到全局变量startup_time（秒）中。
+//调用的kernel_mktime()用于计算从1970.1.1 0时起到开机当日经过的秒数作为
+//开机时间
 static void time_init(void)
 {
 	struct tm time;
-
+    //CMOS访问速度慢，为了减小时间误差，在读取了循环所有的数值之后
+    //如cmos中秒数发生了变化，重新读取，内核就能把时间控制在1s之内
 	do {
 		time.tm_sec = CMOS_READ(0);
 		time.tm_min = CMOS_READ(2);
@@ -178,41 +192,60 @@ static void time_init(void)
 		time.tm_mon = CMOS_READ(8);
 		time.tm_year = CMOS_READ(9);
 	} while (time.tm_sec != CMOS_READ(0));
+
 	BCD_TO_BIN(time.tm_sec);
 	BCD_TO_BIN(time.tm_min);
 	BCD_TO_BIN(time.tm_hour);
 	BCD_TO_BIN(time.tm_mday);
 	BCD_TO_BIN(time.tm_mon);
 	BCD_TO_BIN(time.tm_year);
-	time.tm_mon--;
+	time.tm_mon--;//0-11
+	//计算机开机时间
 	startup_time = kernel_mktime(&time);
 }
 
+//机器具有的物理内存容量（字节数）
 static long memory_end = 0;
+
+//高速缓冲区末端地址
 static long buffer_memory_end = 0;
+
+//主内存（将用于分页）开始的位置
 static long main_memory_start = 0;
 
+//结构体用于存放硬盘参数表信息
 struct drive_info { char dummy[32]; } drive_info;
 
+//内核初始化程序，初始化结束之后将以任务0（idle任务即空闲任务）的身份运行
 void main(void)		/* This really IS void, no error here. */
 {			/* The startup routine assumes (well, ...) this */
 /*
  * Interrupts are still disabled. Do necessary setups, then
  * enable them
  */
- 	ROOT_DEV = ORIG_ROOT_DEV;
- 	drive_info = DRIVE_INFO;
-	memory_end = (1<<20) + (EXT_MEM_K<<10);
-	memory_end &= 0xfffff000;
-	if (memory_end > 16*1024*1024)
+
+   //ROOT_DEV 根设备号  include/fs.h  extern int ROOT_DEV;
+   //memory_end 机器内存数
+   //buffer_memory_end 高速缓存末端地址
+   //main_memory_start 主内存开始的地方
+ 	ROOT_DEV = ORIG_ROOT_DEV;  // fs/super.c int ROOT_DEV = 0;
+ 	drive_info = DRIVE_INFO;  //复制0x90080处的硬盘参数
+	memory_end = (1<<20) + (EXT_MEM_K<<10); //内存大小 = 1MB + 扩展内存（k）*1024字节
+	memory_end &= 0xfffff000; //忽略不到4KB(1页)的内存数
+	if (memory_end > 16*1024*1024) //内存>16MB,按16MB算
 		memory_end = 16*1024*1024;
-	if (memory_end > 12*1024*1024) 
+
+	if (memory_end > 12*1024*1024) //内存 > 12MB,则设置缓冲区末端 = 2MB
 		buffer_memory_end = 4*1024*1024;
-	else if (memory_end > 6*1024*1024)
+	else if (memory_end > 6*1024*1024) //内存 > 6MB,则设置缓冲区末端 = 4MB
 		buffer_memory_end = 2*1024*1024;
 	else
-		buffer_memory_end = 1*1024*1024;
-	main_memory_start = buffer_memory_end;
+		buffer_memory_end = 1*1024*1024; //设置缓冲区末端为1M
+	main_memory_start = buffer_memory_end;//主内存起始位置 = 缓冲区末端
+
+//MakeFile文件中定义了内存虚拟盘符号RAMDISK
+//则初始化虚拟盘，主内存将减少
+//kernel/blk_drv/ramdisk.c
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif

@@ -19,6 +19,21 @@
 
 */
 
+/**
+1.CMOS信息
+  CMOS内存是电池供电的64或128字节内存块，是RTC的一部分，存放时钟和日期信息
+ 存放格式是BCD码
+   地址空间在基本地址空间之外，不包含可执行代码，需要端口进行访问
+   0x70 地址端口  
+   0x71 数据端口 （IN）
+
+   读取字节偏移，写数据
+   OUT 0x70 送地址
+   IN  0x71 读数据
+*/
+
+
+
 /*
  * we need this inline - forking from kernel space will result
  * in NO COPY ON WRITE (!!!), until an execve is executed. This
@@ -219,7 +234,7 @@ struct drive_info { char dummy[32]; } drive_info;
 //内核初始化程序，初始化结束之后将以任务0（idle任务即空闲任务）的身份运行
 void main(void)		/* This really IS void, no error here. */
 {			/* The startup routine assumes (well, ...) this */
-/*
+ /*
  * Interrupts are still disabled. Do necessary setups, then
  * enable them
  */
@@ -249,20 +264,21 @@ void main(void)		/* This really IS void, no error here. */
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif
-	mem_init(main_memory_start,memory_end);
-	trap_init();
-	blk_dev_init();
-	chr_dev_init();
-	tty_init();
-	time_init();
-	sched_init();
-	buffer_init(buffer_memory_end);
-	hd_init();
-	floppy_init();
-	sti();
-	move_to_user_mode();
+	mem_init(main_memory_start,memory_end); //主内存初始化 mm/memory.c
+	trap_init(); //陷阱门（硬件中断向量）初始化 kernel/traps.c
+	blk_dev_init();//块设备初始化 kernel/blk_dev/ll_rw_blk.c
+	chr_dev_init();//字符设备初始化 kernel/chr_dev/tty_io.c
+	tty_init();//tty初始化 kernel/chr_dev/tty_io.c
+	time_init();//设置开机时间
+	sched_init();//调度程序初始化（加载任务0的tr，ldtr）(kernel/sched.c)
+	buffer_init(buffer_memory_end);//缓冲管理初始化建内存链表 fs/buffer.c
+	hd_init();//硬盘初始化
+	floppy_init();//软驱初始化
+	sti();//开启中断
+	//在堆栈中设置参数，利用中断返回指令启动任务0的执行
+	move_to_user_mode();//移动到任务模式下 include/asm/system.h
 	if (!fork()) {		/* we count on this going ok */
-		init();
+		init();//子进程中运行任务1
 	}
 /*
  *   NOTE!!   For any other task 'pause()' would mean we have to get a
@@ -271,65 +287,105 @@ void main(void)		/* This really IS void, no error here. */
  * can run). For task0 'pause()' just means we go check if some other
  * task can run, and if not we return here.
  */
+
+	//pause()意味着必须等待收到一个信号才开始返回就绪态，但是任务0是特例
+	//任务0在任何空闲时间都会被激活（没有其他任务在运行）
+	//即任务0 pause()意味着我们返回来查看是否有其他任务在运行，没有就执行
+	//死循环pause()
+
+	//pause()系统调用（kernel/sched.c）将任务0切换成可中断等待状态，再执行
+	//调度函数，调度函数发现系统中无任务时会切回任务0，不依赖于任务0的状态
 	for(;;) pause();
 }
-
+//格式化信息，输出到标准输出设备 stdout(1)
+//*fmt为格式
 static int printf(const char *fmt, ...)
 {
 	va_list args;
 	int i;
 
 	va_start(args, fmt);
+	//vsprintf格式化字符
 	write(1,printbuf,i=vsprintf(printbuf, fmt, args));
 	va_end(args);
 	return i;
 }
+//读取并执行/etc/rc文件所使用的命令行参数和环境参数
+static char * argv_rc[] = { "/bin/sh", NULL };//执行程序时参数字符数组
+static char * envp_rc[] = { "HOME=/", NULL };//环境字符串数组
 
-static char * argv_rc[] = { "/bin/sh", NULL };
-static char * envp_rc[] = { "HOME=/", NULL };
-
+//登录shell使用的命名行参数和环境参数
+// - 是传递给shell程序的sh的一个标志，识别这个标志，sh会作为登录shell
+//执行，执行过程和在shell提示符下执行sh不一样
 static char * argv[] = { "-/bin/sh",NULL };
 static char * envp[] = { "HOME=/usr/root", NULL };
+
+//main()进行系统的初始化，包括内存管理，硬件设备和驱动程序，init()函数
+//运行在任务0第一次创建的子进程（任务1）中，对第一个要执行的程序（shell）
+//进行初始化，然后以登录shell的方式加载程序并执行
 
 void init(void)
 {
 	int pid,i;
-
-	setup((void *) &drive_info);
+	//setup()是系统调用，用于读取硬盘参数包括分区表信息并加载虚拟盘（已定义）
+	//和安装根文件系统设备。宏定义为 sys_setup(),块设备子目录 /kernel/blk_drv/hd.c
+	setup((void *) &drive_info);//drive_info结构中的第二个硬盘的参数
+	
+	//以读写访问的方式打开设备‘/dev/tty’,对应终端控制台。第一次打开文件操作，
+	//产生的文件描述符为0，及为标准输入设备stdin。读写方式打开是为了复制stdout和stderr
+	//void表示强制函数无返回值
 	(void) open("/dev/tty0",O_RDWR,0);
-	(void) dup(0);
-	(void) dup(0);
+	(void) dup(0);//复制文件描述符，产生1（stdout）
+	(void) dup(0);//复制文件描述符，产生2（stderr）
+	//打印缓冲区块数和总字节数，主内存区空闲字节数
 	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS,
 		NR_BUFFERS*BLOCK_SIZE);
 	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
-	if (!(pid=fork())) {
-		close(0);
-		if (open("/etc/rc",O_RDONLY,0)) //
-			_exit(1);
-		execve("/bin/sh",argv_rc,envp_rc);
-		_exit(2);
+	
+	//close()--open()将stdin重定向到/etc/rc，
+	if (!(pid=fork())) {   //child
+		close(0); //关闭stdin
+		if (open("/etc/rc",O_RDONLY,0)) //只读方式打开
+			_exit(1); //操作未许可
+		execve("/bin/sh",argv_rc,envp_rc);//替换成shell程序
+		_exit(2);//文件目录不存在
 	}
-	if (pid>0)
-		while (pid != wait(&i))
+	if (pid>0)  //parent
+		//wait等待子进程结束或终止，返回值为子进程的pid
+		while (pid != wait(&i)) //空循环
 			/* nothing */;
+
+
 	while (1) {
 		if ((pid=fork())<0) {
 			printf("Fork failed in init\r\n");
 			continue;
 		}
-		if (!pid) {
+		if (!pid) {  //child
+			//关闭遗留的0,1,2
 			close(0);close(1);close(2);
+			//新创建会话组并设置进程组号
 			setsid();
+			//重新打开终端控制台作为stdin
 			(void) open("/dev/tty0",O_RDWR,0);
 			(void) dup(0);
 			(void) dup(0);
 			_exit(execve("/bin/sh",argv,envp));
 		}
+
+        //wait()处理孤儿进程？
+        //一个进程的父进程先终止了，这个进程的父进程会被设置为
+        //这里的init进程（进程1），由init进程负责释放终止进程资源
 		while (1)
 			if (pid == wait(&i))
 				break;
 		printf("\n\rchild %d died with code %04x\n\r",pid,i);
-		sync();
+		sync();//同步操作，刷新缓冲区
 	}
 	_exit(0);	/* NOTE! _exit, not exit() */
 }
+
+//_exit() 直接是一个sys_exit()系统调用
+
+//exit() 普通库函数，执行清除操作，执行各个终止处理程序，关闭标准IO,
+//最后调用sys_exit()

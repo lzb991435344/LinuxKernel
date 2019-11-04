@@ -104,25 +104,33 @@ _reserved:
 	pushl $_do_reserved
 	jmp no_error_code
 
-	# int45 -- ( = 0x20 + 13 ) 数学协处理器（ Coprocessor）发出的中断。
+# int45 -- ( = 0x20 + 13 ) 数学协处理器（ Coprocessor）发出的中断。
 # 当协处理器执行完一个操作时就会发出 IRQ13 中断信号，以通知 CPU 操作完成。
 _irq13:
 	pushl %eax
 	xorb %al,%al
 	outb %al,$0xF0
 	movb $0x20,%al
-	outb %al,$0x20
-	jmp 1f
+	outb %al,$0x20  #向8259主中断控制芯片发送EOI（中断结束）信号。
+	jmp 1f          #跳转指令延时
 1:	jmp 1f
-1:	outb %al,$0xA0
+1:	outb %al,$0xA0  #再向8259主中断控制芯片发送EOI（中断结束）信号。
 	popl %eax
-	jmp _coprocessor_error
+	jmp _coprocessor_error #原本在程序中，现在放到了system_call.s中
+
+
+#以下中断在调用时cpu会在中断返回之前将出错号压入堆栈
+#返回的时候也需要弹出
+
+#int8 -双出错故障。类型：放弃  有错误码
+#通常当cpu在调用前一个异常的处理程序而又检测到一个新异常的时候，两个异常
+#将会被串行处理，但很少碰到这种情况，cpu不能进行这样的串行处理操作，此时引发中断
 
 _double_fault:
-	pushl $_do_double_fault
+	pushl $_do_double_fault #C函数地址入栈
 error_code:
-	xchgl %eax,4(%esp)		# error code <-> %eax
-	xchgl %ebx,(%esp)		# &function <-> %ebx
+	xchgl %eax,4(%esp)		# error code <-> %eax，eax原来的值被保存在堆栈上
+	xchgl %ebx,(%esp)		# &function <-> %ebx，ebx原来的值被保存在堆栈上
 	pushl %ecx
 	pushl %edx
 	pushl %edi
@@ -131,15 +139,15 @@ error_code:
 	push %ds
 	push %es
 	push %fs
-	pushl %eax			# error code
-	lea 44(%esp),%eax		# offset
+	pushl %eax			# error code,出错号入栈
+	lea 44(%esp),%eax	# offset，程序返回地址处堆栈指针位置值入栈
 	pushl %eax
-	movl $0x10,%eax
+	movl $0x10,%eax  #置内核数据段选择符
 	mov %ax,%ds
 	mov %ax,%es
 	mov %ax,%fs
-	call *%ebx
-	addl $8,%esp
+	call *%ebx    #间接调用，调用相应的C函数，其参数已经入栈
+	addl $8,%esp  #丢弃入栈的2个用作C函数的参数
 	pop %fs
 	pop %es
 	pop %ds
@@ -151,6 +159,8 @@ error_code:
 	popl %ebx
 	popl %eax
 	iret
+
+
 
 _invalid_TSS:
 	pushl $_do_invalid_TSS

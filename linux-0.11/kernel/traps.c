@@ -10,28 +10,51 @@
  * to mainly kill the offending process (probably by giving it a signal,
  * but possibly by killing it outright if necessary).
  */
-#include <string.h>
 
-#include <linux/head.h>
-#include <linux/sched.h>
-#include <linux/kernel.h>
-#include <asm/system.h>
-#include <asm/segment.h>
-#include <asm/io.h>
+/**
+  在程序asm.s中保存了一些状态后，本程序用来处理硬件陷阱和故障，主要用于
+ 调试的目的，以后将扩展用来杀死遭损坏的进程（发信号或直接杀死）
+
+*/
+
+#include <string.h> //定义内存或字符串操作的嵌入函数
+
+#include <linux/head.h> //段描述符的简单结构，和几个选择符常量
+#include <linux/sched.h> //调度程序头文件，定义任务结构 task_struct,初始化
+                         //任务0的数据，及描述符参数设置和获取嵌入式汇编函数宏语句
+#include <linux/kernel.h> //内核常用函数的定义
+#include <asm/system.h>  //定义设置或修改描述符、中断门等的嵌入式汇编函数
+#include <asm/segment.h> //段操作头函数，定义段寄存器操作的嵌入式汇编函数
+#include <asm/io.h>  //硬件端口的输入输出宏汇编语句
 
 
+//指定寄存器
+//register char __res asm("ax");
+
+//取段地址中addr处的一个字节
+//参数： 段选择符；段内指定地址
+//输出：%0 -eax(__res);
+//输入：%1 -eax(seg);%2 - 内存地址(*(addr))
 #define get_seg_byte(seg,addr) ({ \
 register char __res; \
 __asm__("push %%fs;mov %%ax,%%fs;movb %%fs:%2,%%al;pop %%fs" \
 	:"=a" (__res):"0" (seg),"m" (*(addr))); \
 __res;})
 
+
+//取段地址中addr处的一个长字（4个字节）
+//参数： 段选择符；段内指定地址
+//输出：%0 -eax(__res);
+//输入：%1 -eax(seg);%2 - 内存地址(*(addr))
 #define get_seg_long(seg,addr) ({ \
-register unsigned long __res; \
+register unsigned long __res; \  
 __asm__("push %%fs;mov %%ax,%%fs;movl %%fs:%2,%%eax;pop %%fs" \
 	:"=a" (__res):"0" (seg),"m" (*(addr))); \
 __res;})
 
+
+//取fs寄存器的值
+//输出：%0 -eax(__res);
 #define _fs() ({ \
 register unsigned short __res; \
 __asm__("mov %%fs,%%ax":"=a" (__res):); \

@@ -160,21 +160,40 @@ error_code:
 	popl %eax
 	iret
 
-
+#int 10 --无效的任务状态段（TSS） 类型：错误：有出错码
+#CPu企图切换一个进程，而进程的TSS无效。根据TSS中的那一部分引起了异常，
+#当TSS的长度超过104字节时，这个异常在当前的任务中产生，因而切换被终止。
+#其他问题则会导致在切换后的新任务中产生本异常。
 
 _invalid_TSS:
 	pushl $_do_invalid_TSS
 	jmp error_code
 
+
+#int11  --段不存在 类型：错误  有出错码
+#被引用的段不在内存内，段描述符不在内存内
 _segment_not_present:
 	pushl $_do_segment_not_present
 	jmp error_code
 
+
+#int12 --堆栈段错误  类型：错误；有出错码
+#指令操作试图超出堆栈段范围内，或者堆栈不在内存中
 _stack_segment:
 	pushl $_do_stack_segment
 	jmp error_code
 
+
+#int13 一般性保护错误  类型：错误；有出错码
+#表明是不属于任何类的错误。若一个异常产生时没有对应的处理向量
+#0-16，通常就会归到此类
 _general_protection:
 	pushl $_do_general_protection
 	jmp error_code
 
+
+#int7  设备不存在（_device_not_available）
+#int14  页错误(_page_fault)
+#int16  协处理错误（_coprocessor_error）
+#时钟中断 int 0x20(_time_interrupt)
+#系统调用 int 0x80(_system_call)

@@ -30,9 +30,9 @@
  *	2C(%esp) - %oldss
  */
 
-SIG_CHLD	= 17
+SIG_CHLD	= 17  #定义SIG_CHLD信号（子进程停止或结束）
 
-EAX		= 0x00
+EAX		= 0x00  #堆栈中寄存器的偏移位置
 EBX		= 0x04
 ECX		= 0x08
 EDX		= 0x0C
@@ -42,53 +42,69 @@ DS		= 0x18
 EIP		= 0x1C
 CS		= 0x20
 EFLAGS		= 0x24
-OLDESP		= 0x28
+OLDESP		= 0x28  #特权级发生变化时栈会切换，用户栈指针被保存在内核态栈中
 OLDSS		= 0x2C
 
-state	= 0		# these are offsets into the task-struct.
-counter	= 4
-priority = 8
-signal	= 12
-sigaction = 16		# MUST be 16 (=len of sigaction)
-blocked = (33*16)
+#定义在task_struct中变量的偏移
+
+state	= 0		# these are offsets into the task-struct. 状态码
+counter	= 4     #任务运行时的计数（递减）滴答数，运行时间片
+priority = 8    #运行优先数，任务开始时，counter = priority，越大运行时间越长
+signal	= 12    #信号位图，每一个比特位代表一种信号
+sigaction = 16		# MUST be 16 (=len of sigaction)  sigaction必须是16字节
+blocked = (33*16)  #受阻信号位图的偏移量
 
 # offsets within sigaction
-sa_handler = 0
-sa_mask = 4
-sa_flags = 8
-sa_restorer = 12
+sa_handler = 0    #信号处理的句柄
+sa_mask = 4       #信号屏蔽码
+sa_flags = 8      #信号集
+sa_restorer = 12  #恢复指针函数
 
-nr_system_calls = 72
+nr_system_calls = 72  #0.11中系统调用总数
 
 /*
  * Ok, I get parallel printer interrupts while using the floppy for some
  * strange reason. Urgel. Now I just ignore them.
  */
+
+ #定义入口点
 .globl _system_call,_sys_fork,_timer_interrupt,_sys_execve
 .globl _hd_interrupt,_floppy_interrupt,_parallel_interrupt
 .globl _device_not_available, _coprocessor_error
 
-.align 2
+#错误的系统调用号
+.align 2   #内存4字节对齐
 bad_sys_call:
-	movl $-1,%eax
+	movl $-1,%eax  #eax中置为-1，退出中断
 	iret
+
+#重新执行调度程序入口，调度程序schedule()返回时就在ret_from_sys_call处继续执行	
 .align 2
 reschedule:
-	pushl $ret_from_sys_call
+	pushl $ret_from_sys_call  #ret_from_sys_call返回的地址入栈
 	jmp _schedule
+
+# int 0x80 ---Linux系统调用入口点（调用中断 int0x80,eax中是调用号）
 .align 2
 _system_call:
-	cmpl $nr_system_calls-1,%eax
+	cmpl $nr_system_calls-1,%eax  #调用号超出范围的话就在eax中置-1并退出
 	ja bad_sys_call
-	push %ds
+	push %ds  #保留原段寄存器值
 	push %es
 	push %fs
+
+#一个系统调用最多可带3个参数，也可以不带参数
+#寄存器入栈的顺序是GNU规定的
+#ebx放第一个参数，ecx第二个，edx第三个
 	pushl %edx
 	pushl %ecx		# push %ebx,%ecx,%edx as parameters
 	pushl %ebx		# to the system call
 	movl $0x10,%edx		# set up ds,es to kernel space
-	mov %dx,%ds
+	mov %dx,%ds         #ds,es指向内核数据段（全局描述符表中数据段描述符）
 	mov %dx,%es
+
+#fs指向局部的数据段（局部描述符表中数据段描述符），即指向执行本次系统调用的用户程序
+#的数据段，内核给任务分配的代码和数据内存段是重叠的，他们段基址和段限长相同
 	movl $0x17,%edx		# fs points to local data space
 	mov %dx,%fs
 	call _sys_call_table(,%eax,4)
@@ -249,6 +265,13 @@ _hd_interrupt:
 	popl %eax
 	iret
 
+# int 38 --int 0x26 
+#软盘驱动器中断处理程序，硬件响应中断请求 IRQ6
+#首先向8259A中断控制器主芯片发送EOI指令，然后取变量_do_floppy
+#中的函数指针放入eax中，并置do_floppy为空，接着判断eax函数指针是否为空
+#（1）空，eax = _unexpected_floppy_interrupt(),显示出错信息
+#（2）调用eax指向的函数 rw_interrupt,seek_interrupt,recal_interrupt，
+#reset_interrupt或 _unexpected_floppy_interrupt
 _floppy_interrupt:
 	pushl %eax
 	pushl %ecx
@@ -256,27 +279,33 @@ _floppy_interrupt:
 	push %ds
 	push %es
 	push %fs
-	movl $0x10,%eax
+	movl $0x10,%eax  #ds,es置为内核数据段
 	mov %ax,%ds
 	mov %ax,%es
-	movl $0x17,%eax
+	movl $0x17,%eax  #fs置为调用程序局部数据段
 	mov %ax,%fs
-	movb $0x20,%al
+	movb $0x20,%al     #送主8259A中断控制器EOI指令
 	outb %al,$0x20		# EOI to interrupt controller #1
+	
+
 	xorl %eax,%eax
+	#换指令XCHG是两个寄存器，寄存器和内存变量之间内容的交换指令，
+	#两个操作数的数据类型要相同，可以是一个字节，也可以是一个字，
+	#也可以是双字
 	xchgl _do_floppy,%eax
-	testl %eax,%eax
-	jne 1f
+	testl %eax,%eax  #测试指令对否为空
+	jne 1f  #ZF = 0转移，指针指向_unexpected_floppy_interrupt（）
 	movl $_unexpected_floppy_interrupt,%eax
-1:	call *%eax		# "interesting" way of handling intr.
-	pop %fs
+1:	call *%eax		# "interesting" way of handling intr. #间接调用
+	pop %fs         
 	pop %es
 	pop %ds
 	popl %edx
 	popl %ecx
 	popl %eax
 	iret
-
+##int 39--int 0x27并行口处理程序，对应硬件中断强请求IRQ7
+#未实现，只是发送EOI指令
 _parallel_interrupt:
 	pushl %eax
 	movb $0x20,%al

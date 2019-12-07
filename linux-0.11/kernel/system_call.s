@@ -212,13 +212,17 @@ _timer_interrupt:
 	addl $4,%esp		# task switching to accounting ...
 	jmp ret_from_sys_call
 
+#sys_execve()系统调用。取中断调用程序的代码指针作为参数调用C语言do_execve()
+#do_execve()在（fs/exec.c）
 .align 2
 _sys_execve:
-	lea EIP(%esp),%eax
+	lea EIP(%esp),%eax  #eax指向堆栈中保存用户程序eip指针处
 	pushl %eax
 	call _do_execve
-	addl $4,%esp
+	addl $4,%esp  #丢弃调用时压入栈的EIP值
 	ret
+
+
 
 .align 2
 _sys_fork:

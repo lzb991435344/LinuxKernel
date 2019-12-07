@@ -157,7 +157,7 @@ void ll_rw_block(int rw, struct buffer_head * bh)
 void blk_dev_init(void)
 {
 	int i;
-
+    // 32，请求队列中的项数
 	for (i=0 ; i<NR_REQUEST ; i++) {
 		request[i].dev = -1;
 		request[i].next = NULL;

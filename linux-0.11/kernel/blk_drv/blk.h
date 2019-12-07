@@ -1,7 +1,10 @@
 #ifndef _BLK_H
 #define _BLK_H
 
-#define NR_BLK_DEV	7
+//
+
+
+#define NR_BLK_DEV	7  //块设备的数量
 /*
  * NR_REQUEST is the number of entries in the request-queue.
  * NOTE that writes may use only the low 2/3 of these: reads
@@ -12,7 +15,11 @@
  * buffers when they are in the queue. 64 seems to be too many (easily
  * long pauses in reading when heavy writing/syncing is going on)
  */
-#define NR_REQUEST	32
+#define NR_REQUEST	32  //请求队列中包含的项数
+
+//写操作使用这些中低端的2/3项，读操作优先
+//缓冲区在队列中锁住时不用显得数字很大（大量的写/同步操作运行时容易引起
+//长时间的暂停）
 
 /*
  * Ok, this is an expanded form so that we can use the same
@@ -20,16 +27,21 @@
  * paging, 'bh' is NULL, and 'waiting' is used to wait for
  * read/write completion.
  */
+
+// request结构扩展形式，在分页请求中可以使用相同的结构。
+//分页处理时，bh = NULL; waiting用于等待读/写的完成
+//dev = -1 表示队列中改项没有被使用
+//READ(0)  WRITE(1)
 struct request {
-	int dev;		/* -1 if no request */
-	int cmd;		/* READ or WRITE */
-	int errors;
-	unsigned long sector;
-	unsigned long nr_sectors;
-	char * buffer;
-	struct task_struct * waiting;
-	struct buffer_head * bh;
-	struct request * next;
+	int dev;		/* -1 if no request */  //发请求的设备号
+	int cmd;		/* READ or WRITE */  //READ OR WRITE操作
+	int errors;   //操作时产生的错误次数
+	unsigned long sector; //起始扇区（1块 = 2扇区）
+	unsigned long nr_sectors;//读/写扇区数
+	char * buffer;            //数据缓冲区的指针
+	struct task_struct * waiting;//任务等待操作完成的地方
+	struct buffer_head * bh; //缓冲区的头指针
+	struct request * next; //指向下一项请求
 };
 
 /*

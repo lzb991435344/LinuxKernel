@@ -345,16 +345,29 @@ struct buffer_head * breada(int dev,int first, ...)
 	return (NULL);
 }
 
+
+//缓冲区初始化函数
+//buffer_end 缓冲区内存末端
+// 16M内存   缓冲区末端为4M
+// 8M内存    缓冲区末端为4M
+
+//start_buffer处和缓冲区末端 buffer_end处分别同时设置（初始化）缓冲区
+//块头结构和对应的数据块，直到缓冲区中内存被分配完毕
 void buffer_init(long buffer_end)
 {
 	struct buffer_head * h = start_buffer;
 	void * b;
 	int i;
 
-	if (buffer_end == 1<<20)
-		b = (void *) (640*1024);
+	//参数提供的缓冲区高端位置确定实际的缓冲区位置b
+	// 等于1MB 则 从 640K -1MB被显示内存和BIOS占用，实际缓冲区就是640K
+	//否则缓冲区内存高端一定大于1MB
+	if (buffer_end == 1<<20) //1MB
+		b = (void *) (640*1024); //640K
 	else
 		b = (void *) buffer_end;
+
+	//
 	while ( (b -= BLOCK_SIZE) >= ((void *) (h+1)) ) {
 		h->b_dev = 0;
 		h->b_dirt = 0;
